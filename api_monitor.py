@@ -232,6 +232,15 @@ init_history_db()
 def save_db(db: dict) -> None:
     SUBSCRIBERS_FILE.write_text(json.dumps(db, indent=2, ensure_ascii=False), encoding="utf-8")
 
+# ─────────────────────────────────────────────────────
+#  GLOBAL METRICS
+# ─────────────────────────────────────────────────────
+GLOBAL_METRICS = {
+    "start_time": datetime.now(),
+    "polls": 0,
+    "latency": "0.00s",
+    "total_courses": 0
+}
 
 # ─────────────────────────────────────────────────────
 #  TELEGRAM HELPERS
@@ -617,26 +626,34 @@ def monitor_thread():
     
     # Store known counts per slot
     baselines: dict[int, dict] = {}
-    poll = 0
 
     while True:
         db = load_db()
         active_slots = db.get("slots", [])
         
-        poll += 1
-        log.info(f"\n[Poll #{poll:04d}]  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        GLOBAL_METRICS["polls"] += 1
+        log.info(f"\n[Poll #{GLOBAL_METRICS['polls']:04d}]  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        cycle_courses_count = 0
+        cycle_start_t = time.time()
 
         for slot_data in active_slots:
             try:
                 slot_id = slot_data["id"]
                 slot_label = slot_data["label"]
                 
+                t0 = time.time()
                 courses = fetch_courses(slot_id)
+                t1 = time.time()
+                
                 if courses is None:
                     log.warning(f"  [Slot {slot_label}] ⚠  No response, skipping.")
                     continue
 
+                log.info(f"  [API] Slot {slot_label} fetched in {(t1-t0):.2f}s")
                 current_count = len(courses)
+                cycle_courses_count += current_count
+                
                 log_history(slot_id, current_count)
 
                 if slot_id not in baselines:
@@ -695,6 +712,10 @@ def monitor_thread():
 
             except Exception as e:
                 log.error(f"  [Slot {slot_label}] ❌ Error processing courses: {e}")
+        
+        cycle_end_t = time.time()
+        GLOBAL_METRICS["latency"] = f"{(cycle_end_t - cycle_start_t):.2f}s"
+        GLOBAL_METRICS["total_courses"] = cycle_courses_count
 
         # Sleep before next poll
         time.sleep(POLL_INTERVAL)
@@ -839,7 +860,7 @@ def index():
             }
             .stat-grid {
                 display: grid;
-                grid-template-columns: 1fr;
+                grid-template-columns: repeat(2, 1fr);
                 gap: 1rem;
             }
             .stat-card {
@@ -913,6 +934,22 @@ def index():
                         <div class="stat-value" id="slot-count">--</div>
                     </div>
                     <div class="stat-card">
+                        <div class="stat-label">Total Courses</div>
+                        <div class="stat-value" id="course-count">--</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">System Uptime</div>
+                        <div class="stat-value" style="font-size:1.4rem;" id="uptime">--</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total Polls</div>
+                        <div class="stat-value" id="poll-count">--</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">API Latency</div>
+                        <div class="stat-value" id="api-latency">--</div>
+                    </div>
+                    <div class="stat-card" style="grid-column: 1 / -1;">
                         <div class="stat-label">Last Poll Update</div>
                         <div class="stat-value" style="font-size:1.2rem; color:#c9d1d9;" id="last-poll">Waiting...</div>
                     </div>
@@ -982,6 +1019,10 @@ def index():
                     const stats = await statsRes.json();
                     document.getElementById('sub-count').innerText = stats.subscribers;
                     document.getElementById('slot-count').innerText = stats.slots;
+                    document.getElementById('course-count').innerText = stats.total_courses;
+                    document.getElementById('uptime').innerText = stats.uptime;
+                    document.getElementById('poll-count').innerText = stats.polls;
+                    document.getElementById('api-latency').innerText = stats.latency;
                     document.getElementById('last-poll').innerText = stats.time;
 
                     const logsRes = await fetch('/api/logs');
@@ -1076,9 +1117,21 @@ def index():
 @requires_auth
 def api_stats():
     db = load_db()
+    
+    uptime_delta = datetime.now() - GLOBAL_METRICS["start_time"]
+    hours, remainder = divmod(uptime_delta.seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    
+    # Calculate days cleanly if available
+    uptime_str = f"{uptime_delta.days}d {hours}h {minutes}m" if uptime_delta.days > 0 else f"{hours}h {minutes}m"
+    
     return jsonify({
         "subscribers": len(db.get("approved", [])),
         "slots": len(db.get("slots", [])),
+        "total_courses": GLOBAL_METRICS["total_courses"],
+        "uptime": uptime_str,
+        "polls": GLOBAL_METRICS["polls"],
+        "latency": GLOBAL_METRICS["latency"],
         "time": datetime.now().strftime("%I:%M:%S %p")
     })
 
