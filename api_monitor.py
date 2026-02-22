@@ -908,10 +908,11 @@ def api_logs():
         return jsonify({"logs": [f"Error reading logs: {e}"]})
 
 def flask_server():
-    port = int(os.environ.get("PORT", 8080))  # Default Alwaysdata WSGI port
-    log.info(f"  [Web] Starting Flask Dashboard on port {port}")
-    # Run Flask with Waitress or standard Werkzeug for now
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    port = int(os.environ.get("PORT", 8080))  # Default Alwaysdata port
+    ip_addr = os.environ.get("IP", "::")      # Alwaysdata assigns an IPv6 address
+    log.info(f"  [Web] Starting Flask Dashboard on {ip_addr}:{port}")
+    # Run Flask directly
+    app.run(host=ip_addr, port=port, debug=False, use_reloader=False)
 
 if __name__ == "__main__":
     log.info("=" * 60)
