@@ -45,9 +45,9 @@ BASE_URL = (
     "?Page=StudentInfobyId&Mode=GetCourseBySlot&Id={slot_id}"
 )
 
-# ARMS credentials for auto-login — set these as Railway environment variables
-ARMS_USERNAME = os.environ.get("ARMS_USERNAME", "")   # ARMS username / roll number
-ARMS_PASSWORD = os.environ.get("ARMS_PASSWORD", "")   # ARMS password
+# ARMS credentials for auto-login
+ARMS_USERNAME = "Ssetsec242"   # ARMS username / roll number
+ARMS_PASSWORD = "aadhiran@13"   # ARMS password
 
 ARMS_LOGIN_URL = "https://arms.sse.saveetha.com/Login.aspx"
 
@@ -74,13 +74,13 @@ HEADERS = {
 # Seconds between slot polls
 POLL_INTERVAL = 20
 
-# ── Telegram — set these as Railway environment variables ─────────────────────
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+# ── Telegram ─────────────────────
+TELEGRAM_BOT_TOKEN = "8340772186:AAGa3fzCjNr4TClpvjuRQzizpSaF521-SuY"
 TELEGRAM_API       = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-ADMIN_CHAT_ID      = os.environ.get("ADMIN_CHAT_ID", "")       # only this ID can run admin commands
-ADMIN_PHONE        = os.environ.get("ADMIN_PHONE", "")          # your phone number (for reference)
-CHANNEL_CHAT_ID    = os.environ.get("CHANNEL_CHAT_ID", "")      # private channel — all slot alerts go here
+ADMIN_CHAT_ID      = "8467592443"       # only this ID can run admin commands
+ADMIN_PHONE        = "9360406137"          # your phone number (for reference)
+CHANNEL_CHAT_ID    = "-1003845063774"      # private channel — all slot alerts go here
 
 # File that stores subscribers across restarts
 SUBSCRIBERS_FILE   = Path("subscribers.json")
