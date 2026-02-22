@@ -908,11 +908,30 @@ def api_logs():
         return jsonify({"logs": [f"Error reading logs: {e}"]})
 
 def flask_server():
-    port = int(os.environ.get("PORT", 8080))  # Default Alwaysdata port
-    ip_addr = os.environ.get("IP", "::")      # Alwaysdata assigns an IPv6 address
-    log.info(f"  [Web] Starting Flask Dashboard on {ip_addr}:{port}")
-    # Run Flask directly
-    app.run(host=ip_addr, port=port, debug=False, use_reloader=False)
+    import werkzeug.serving
+    import logging
+    
+    # Force Werkzeug logger to be quiet
+    log_werkzeug = logging.getLogger('werkzeug')
+    log_werkzeug.setLevel(logging.ERROR)
+    log_werkzeug.disabled = True
+
+    # Custom handler to completely suppress request logging
+    class NoLogRequestHandler(werkzeug.serving.WSGIRequestHandler):
+        def log_request(self, code='-', size='-'):
+            pass
+        def log(self, type, message, *args):
+            pass
+
+    port = int(os.environ.get("PORT", 8100))
+    ip_addr = os.environ.get("IP", "::")
+    log.info(f"  [Web] Attempting to start Flask WSGI on {ip_addr}:{port} (Silent HTTP mode)")
+    werkzeug.serving.run_simple(
+        ip_addr, port, app,
+        use_reloader=False, 
+        use_debugger=False,
+        request_handler=NoLogRequestHandler
+    )
 
 if __name__ == "__main__":
     log.info("=" * 60)
