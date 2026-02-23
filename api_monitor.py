@@ -83,6 +83,9 @@ CHANNEL_CHAT_ID    = os.environ.get("CHANNEL_CHAT_ID", "")      # private channe
 # File that stores subscribers across restarts
 SUBSCRIBERS_FILE   = Path("subscribers.json")
 
+# Dashboard URL for notifications
+DASHBOARD_URL      = os.environ.get("DASHBOARD_URL", "")
+
 # ─────────────────────────────────────────────────────
 #  LOGGING
 # ─────────────────────────────────────────────────────
@@ -112,64 +115,66 @@ def auto_login() -> bool:
         log.warning("  [Login] No credentials set — skipping auto-login.")
         return False
 
-    try:
-        log.info("  [Login] Attempting auto-login to ARMS…")
-        s = requests.Session()
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            log.info(f"  [Login] Attempting auto-login to ARMS (Attempt {attempt})…")
+            s = requests.Session()
 
-        # Step 1: GET login page to grab hidden ASP.NET fields
-        r = s.get(ARMS_LOGIN_URL, timeout=15)
-        r.raise_for_status()
+            # Step 1: GET login page to grab hidden ASP.NET fields
+            r = s.get(ARMS_LOGIN_URL, timeout=30)
+            r.raise_for_status()
 
-        import re
-        def _field(name):
-            m = re.search(rf'id="{name}"[^>]*value="([^"]*)"|name="{name}"[^>]*value="([^"]*)"|value="([^"]*)"[^>]*name="{name}"', r.text)
-            return (m.group(1) or m.group(2) or m.group(3) or "") if m else ""
+            import re
+            def _field(name):
+                m = re.search(rf'id="{name}"[^>]*value="([^"]*)"|name="{name}"[^>]*value="([^"]*)"|value="([^"]*)"[^>]*name="{name}"', r.text)
+                return (m.group(1) or m.group(2) or m.group(3) or "") if m else ""
 
-        viewstate       = _field("__VIEWSTATE")
-        eventvalidation = _field("__EVENTVALIDATION")
-        vsgenerator     = _field("__VIEWSTATEGENERATOR")
+            viewstate       = _field("__VIEWSTATE")
+            eventvalidation = _field("__EVENTVALIDATION")
+            vsgenerator     = _field("__VIEWSTATEGENERATOR")
 
-        # Step 2: POST credentials
-        payload = {
-            "__VIEWSTATE":          viewstate,
-            "__VIEWSTATEGENERATOR": vsgenerator,
-            "__EVENTVALIDATION":    eventvalidation,
-            "txtusername":          ARMS_USERNAME,
-            "txtpassword":          ARMS_PASSWORD,
-            "btnlogin":             "Login",
-        }
-        resp = s.post(ARMS_LOGIN_URL, data=payload, timeout=15, allow_redirects=True)
+            # Step 2: POST credentials
+            payload = {
+                "__VIEWSTATE":          viewstate,
+                "__VIEWSTATEGENERATOR": vsgenerator,
+                "__EVENTVALIDATION":    eventvalidation,
+                "txtusername":          ARMS_USERNAME,
+                "txtpassword":          ARMS_PASSWORD,
+                "btnlogin":             "Login",
+            }
+            resp = s.post(ARMS_LOGIN_URL, data=payload, timeout=30, allow_redirects=True)
 
-        # Step 3: Extract session cookie
-        session_id = s.cookies.get("ASP.NET_SessionId")
-        if not session_id:
-            # Try from response cookies directly
-            session_id = resp.cookies.get("ASP.NET_SessionId")
+            # Step 3: Extract session cookie
+            session_id = s.cookies.get("ASP.NET_SessionId") or resp.cookies.get("ASP.NET_SessionId")
 
-        if session_id:
-            COOKIES["ASP.NET_SessionId"] = session_id
-            _last_alert.clear()   # reset cooldowns — fresh session
-            log.info(f"  [Login] ✅ Auto-login successful! Session: {session_id[:12]}…")
-            send_message(
-                ADMIN_CHAT_ID,
-                f"🔑 <b>Auto-login successful!</b>\n"
-                f"New session: <code>{session_id[:16]}…</code>"
-            )
-            return True
-        else:
-            log.error("  [Login] ❌ Login failed — bad credentials or ARMS changed its form.")
-            send_message(
-                ADMIN_CHAT_ID,
-                "❌ <b>Auto-login failed!</b>\n"
-                "Could not extract session cookie.\n"
-                "Check username/password or use /setcookie manually."
-            )
-            return False
+            if session_id:
+                COOKIES["ASP.NET_SessionId"] = session_id
+                _last_alert.clear()   # reset cooldowns — fresh session
+                log.info(f"  [Login] ✅ Auto-login successful! Session: {session_id[:12]}…")
+                send_message(
+                    ADMIN_CHAT_ID,
+                    f"🔑 <b>Auto-login successful!</b>\n"
+                    f"New session: <code>{session_id[:16]}…</code>",
+                    inline_keyboard=[[{"text": "🔗 Open Dashboard", "url": DASHBOARD_URL}]] if DASHBOARD_URL else None
+                )
+                return True
+            else:
+                log.warning(f"  [Login] ⚠ Attempt {attempt} failed: No session ID in response.")
+                if attempt == max_retries:
+                    log.error("  [Login] ❌ All login attempts failed.")
+                    send_message(ADMIN_CHAT_ID, "❌ <b>Auto-login failed!</b>\nCheck credentials or use /setcookie manually.")
+                    return False
+                time.sleep(2)
 
-    except Exception as e:
-        log.error(f"  [Login] ❌ Exception during login: {e}")
-        send_message(ADMIN_CHAT_ID, f"❌ <b>Auto-login error:</b> {e}")
-        return False
+        except Exception as e:
+            log.warning(f"  [Login] ⚠ Attempt {attempt} exception: {e}")
+            if attempt == max_retries:
+                log.error(f"  [Login] ❌ Exception during auto-login after {max_retries} tries: {e}")
+                send_message(ADMIN_CHAT_ID, f"❌ <b>Auto-login error after retries:</b> {e}")
+                return False
+            time.sleep(2)
+    return False
 
 
 
@@ -263,17 +268,24 @@ def tg_post(method: str, **kwargs) -> dict:
         return {}
 
 
-def send_message(chat_id: str | int, text: str, reply_markup=None) -> None:
+def send_message(chat_id: str | int, text: str, reply_markup=None, inline_keyboard=None) -> None:
     payload = {"chat_id": str(chat_id), "text": text, "parse_mode": "HTML"}
     if reply_markup:
         payload["reply_markup"] = reply_markup
+    elif inline_keyboard:
+        payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
     tg_post("sendMessage", **payload)
 
 
-def broadcast(text: str) -> None:
+def broadcast(text: str, include_dashboard: bool = False) -> None:
     """Send a slot alert to the private channel."""
     log.info(f"  [Bot] Sending alert to channel {CHANNEL_CHAT_ID}…")
-    send_message(CHANNEL_CHAT_ID, text)
+    
+    inline_kb = None
+    if include_dashboard and DASHBOARD_URL:
+        inline_kb = [[{"text": "🔗 Open Dashboard", "url": DASHBOARD_URL}]]
+        
+    send_message(CHANNEL_CHAT_ID, text, inline_keyboard=inline_kb)
 
 
 def set_bot_profile() -> None:
@@ -538,6 +550,13 @@ def bot_thread():
                 elif text == "/setcookie":
                     send_message(chat_id, "Usage: /setcookie &lt;ASP.NET_SessionId value&gt;\n\nGet it from browser DevTools → Application → Cookies → arms.sse.saveetha.com")
 
+                elif text == "/dashboard":
+                    if DASHBOARD_URL:
+                        send_message(chat_id, f"📊 <b>ARMS Monitor Dashboard</b>\n\nClick the button below to view live analytics and configuration.", 
+                                     inline_keyboard=[[{"text": "🔗 Open Dashboard", "url": DASHBOARD_URL}]])
+                    else:
+                        send_message(chat_id, "⚠️ Dashboard URL not configured. Contact admin.")
+
         except Exception as e:
             log.warning(f"  [Bot] Poll error: {e}")
             time.sleep(5)
@@ -571,43 +590,59 @@ def alert_admin(key: str, message: str) -> None:
 
 def fetch_courses(slot_id: int) -> list[dict] | None:
     url = BASE_URL.format(slot_id=slot_id)
-    try:
-        resp = requests.get(url, headers=HEADERS, cookies=COOKIES, timeout=15)
-        resp.raise_for_status()
-        body = resp.text.strip()
-        if not body:
-            # Try auto-login first before alerting admin
-            log.warning(f"  [Slot {slot_id}] Empty response — attempting auto-login…")
-            if auto_login():
-                # Retry the request with the new cookie
-                try:
-                    resp2 = requests.get(url, headers=HEADERS, cookies=COOKIES, timeout=15)
-                    body = resp2.text.strip()
-                except Exception:
-                    body = ""
+    max_retries = 3
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, headers=HEADERS, cookies=COOKIES, timeout=30)
+            resp.raise_for_status()
+            body = resp.text.strip()
+            
             if not body:
-                alert_admin(
-                    f"slot{slot_id}_empty",
-                    f"❌ Slot {slot_id}: Empty response — session cookie has likely <b>expired</b>.\n"
-                    "Auto-login also failed. Update with /setcookie &lt;new_value&gt;"
-                )
+                # Try auto-login first before alerting admin
+                log.warning(f"  [Slot {slot_id}] Empty response (Attempt {attempt}) — attempting auto-login…")
+                if auto_login():
+                    # Retry the request with the new cookie
+                    try:
+                        resp2 = requests.get(url, headers=HEADERS, cookies=COOKIES, timeout=30)
+                        body = resp2.text.strip()
+                    except Exception:
+                        body = ""
+                
+                if not body:
+                    if attempt == max_retries:
+                        alert_admin(
+                            f"slot{slot_id}_empty",
+                            f"❌ Slot {slot_id}: Empty response — session cookie has likely <b>expired</b>.\n"
+                            "Auto-login also failed. Update with /setcookie &lt;new_value&gt;"
+                        )
+                        return None
+                    time.sleep(2)
+                    continue
+
+            data = json.loads(body).get("Table", [])
+            # Clear any previous empty-response alert for this slot
+            _last_alert.pop(f"slot{slot_id}_empty", None)
+            return data
+
+        except requests.exceptions.RequestException as e:
+            log.warning(f"  [Slot {slot_id}] ⚠ Attempt {attempt} failed: {e}")
+            if attempt == max_retries:
+                if isinstance(e, requests.exceptions.ConnectionError):
+                    alert_admin(f"slot{slot_id}_conn", f"🌐 Slot {slot_id}: <b>Connection error</b> — no internet or ARMS is down.")
+                elif isinstance(e, requests.exceptions.Timeout):
+                    alert_admin(f"slot{slot_id}_timeout", f"⏱ Slot {slot_id}: <b>Request timed out</b> (30s) — ARMS may be slow.")
+                elif isinstance(e, requests.exceptions.HTTPError):
+                    alert_admin(f"slot{slot_id}_http", f"🚫 Slot {slot_id}: <b>HTTP error</b> — {e}")
+                else:
+                    alert_admin(f"slot{slot_id}_err", f"💥 Slot {slot_id}: Unexpected error — {e}")
                 return None
-        data = json.loads(body).get("Table", [])
-        # Clear any previous empty-response alert for this slot
-        _last_alert.pop(f"slot{slot_id}_empty", None)
-        return data
-    except requests.exceptions.ConnectionError:
-        alert_admin(f"slot{slot_id}_conn", f"🌐 Slot {slot_id}: <b>Connection error</b> — no internet or ARMS is down.")
-        return None
-    except requests.exceptions.Timeout:
-        alert_admin(f"slot{slot_id}_timeout", f"⏱ Slot {slot_id}: <b>Request timed out</b> — ARMS may be slow or unreachable.")
-        return None
-    except requests.exceptions.HTTPError as e:
-        alert_admin(f"slot{slot_id}_http", f"🚫 Slot {slot_id}: <b>HTTP error</b> — {e}")
-        return None
-    except Exception as e:
-        alert_admin(f"slot{slot_id}_err", f"💥 Slot {slot_id}: Unexpected error — {e}")
-        return None
+            time.sleep(2)
+            
+        except Exception as e:
+            log.error(f"  [Slot {slot_id}] 💥 Unexpected exception: {e}")
+            return None
+    return None
 
 
 def summarise(courses: list[dict]) -> str:
@@ -710,10 +745,10 @@ def monitor_thread():
                             tg_post("sendMessage", **msg)
                         
                         # Also send separately to admin
-                        send_message(ADMIN_CHAT_ID, tg_text)
+                        send_message(ADMIN_CHAT_ID, tg_text, inline_keyboard=[[{"text": "🔗 Open Dashboard", "url": DASHBOARD_URL}]] if DASHBOARD_URL else None)
                         
                         # Broadcast to the channel stream
-                        broadcast(tg_text)
+                        broadcast(tg_text, include_dashboard=True)
 
                     elif current_count < prev_count:
                         log.info(f"  [Slot {slot_id}] 📉 Count decreased {prev_count}→{current_count} (no notification sent)")
@@ -726,6 +761,18 @@ def monitor_thread():
         cycle_end_t = time.time()
         GLOBAL_METRICS["latency"] = f"{(cycle_end_t - cycle_start_t):.2f}s"
         GLOBAL_METRICS["total_courses"] = cycle_courses_count
+
+        try:
+            import json
+            with open("metrics.json", "w") as mf:
+                json.dump({
+                    "start_time": GLOBAL_METRICS["start_time"].isoformat(),
+                    "polls": GLOBAL_METRICS["polls"],
+                    "latency": GLOBAL_METRICS["latency"],
+                    "total_courses": GLOBAL_METRICS["total_courses"]
+                }, mf)
+        except Exception as e:
+            log.error(f"  [Metrics] Failed to save metrics: {e}")
 
         # Sleep before next poll
         time.sleep(POLL_INTERVAL)
@@ -758,544 +805,6 @@ def handle_shutdown(signum=None, frame=None):
 #  ENTRY POINT
 # ─────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────
-#  FLASK WEB DASHBOARD & API
-# ─────────────────────────────────────────────────────
-from flask import Flask, request, jsonify, Response
-from functools import wraps
-import pytz # Added pytz import
-
-app = Flask(__name__)
-
-# Basic Authentication wrapper
-def check_auth(username, password):
-    env_user = os.environ.get("DASHBOARD_USER", "KnightWinner")
-    env_pass = os.environ.get("DASHBOARD_PASS", "9360406137")
-    return username == env_user and password == env_pass
-
-def authenticate():
-    return Response(
-    'Could not verify your access level for that URL.\n'
-    'You have to login with proper credentials', 401,
-    {'WWW-Authenticate': 'Basic realm="Login Required"'})
-
-def requires_auth(f):
-    def decorated(*args, **kwargs):
-        # Password authentication removed as requested
-        return f(*args, **kwargs)
-    decorated.__name__ = f.__name__
-    return decorated
-
-@app.route("/")
-@requires_auth
-def index():
-    # Return a premium Glassmorphism React/Vanilla-JS Dashboard
-    html = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ARMS Monitor Control Panel</title>
-        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-        <style>
-            :root {
-                --bg-color: #0d1117;
-                --card-bg: rgba(22, 27, 34, 0.6);
-                --card-border: rgba(255, 255, 255, 0.1);
-                --text-main: #c9d1d9;
-                --text-muted: #8b949e;
-                --accent: #58a6ff;
-                --success: #238636;
-                --danger: #da3633;
-            }
-            body {
-                background-color: var(--bg-color);
-                background-image: radial-gradient(circle at 15% 50%, rgba(88, 166, 255, 0.15), transparent 25%),
-                                  radial-gradient(circle at 85% 30%, rgba(35, 134, 54, 0.15), transparent 25%);
-                color: var(--text-main);
-                font-family: 'Outfit', sans-serif;
-                margin: 0;
-                padding: 2rem;
-                min-height: 100vh;
-                box-sizing: border-box;
-            }
-            .container {
-                max-width: 1400px;
-                margin: 0 auto;
-                display: grid;
-                grid-template-columns: 320px 1fr;
-                gap: 2rem;
-            }
-            .header {
-                grid-column: 1 / -1;
-                display: flex;
-                flex-wrap: wrap;
-                justify-content: space-between;
-                align-items: center;
-                border-bottom: 1px solid var(--card-border);
-                padding-bottom: 1rem;
-                margin-bottom: 1rem;
-                gap: 1rem;
-            }
-            h1 { margin: 0; font-weight: 600; font-size: 1.8rem; letter-spacing: -0.5px; display:flex; align-items:center; gap: 10px; }
-            .status-badge {
-                background: rgba(35, 134, 54, 0.2);
-                color: #3fb950;
-                padding: 6px 16px;
-                border-radius: 20px;
-                font-size: 0.9rem;
-                font-weight: 600;
-                border: 1px solid rgba(63, 185, 80, 0.4);
-                animation: pulse 2s infinite;
-                white-space: nowrap;
-            }
-            @keyframes pulse {
-                0% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.4); }
-                70% { box-shadow: 0 0 0 10px rgba(63, 185, 80, 0); }
-                100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0); }
-            }
-            .glass-panel {
-                background: var(--card-bg);
-                backdrop-filter: blur(16px);
-                -webkit-backdrop-filter: blur(16px);
-                border: 1px solid var(--card-border);
-                border-radius: 20px;
-                padding: 1.8rem;
-                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-                margin-bottom: 1.5rem;
-            }
-            .stat-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-                gap: 1rem;
-            }
-            .stat-card {
-                background: rgba(255,255,255,0.03);
-                border-radius: 12px;
-                padding: 1.2rem;
-                border: 1px solid rgba(255,255,255,0.05);
-                transition: transform 0.2s, background 0.2s;
-            }
-            .stat-card:hover {
-                transform: translateY(-2px);
-                background: rgba(255,255,255,0.06);
-            }
-            .stat-value { font-size: 2.2rem; font-weight: 600; color: var(--accent); margin-top: 5px; line-height: 1.2;}
-            .stat-label { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px;}
-            
-            #log-container {
-                background: #010409;
-                border-radius: 12px;
-                padding: 1rem;
-                height: 400px;
-                overflow-y: auto;
-                font-family: 'JetBrains Mono', 'Courier New', Courier, monospace;
-                font-size: 0.9rem;
-                line-height: 1.6;
-                border: 1px solid #30363d;
-                scrollbar-width: thin;
-                scrollbar-color: #58a6ff #010409;
-            }
-            .log-line { border-bottom: 1px solid rgba(255,255,255,0.02); padding: 5px 0; }
-            .log-time { color: var(--text-muted); margin-right: 15px; }
-            .log-info { color: #8a2be2; }
-            .log-warn { color: #d29922; }
-            .log-err { color: var(--danger); }
-            .log-success { color: #3fb950;}
-
-            .tabs { display: flex; gap: 10px; margin-bottom: 1.5rem; overflow-x: auto; padding-bottom: 5px; }
-            .tabs::-webkit-scrollbar { height: 4px; }
-            .tabs::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 4px; }
-            
-            .tab-btn {
-                background: rgba(255,255,255,0.05); color: var(--text-main); border: 1px solid var(--card-border);
-                padding: 10px 20px; border-radius: 10px; cursor: pointer; font-family: 'Outfit'; font-size: 1rem;
-                transition: all 0.2s ease; white-space: nowrap;
-            }
-            .tab-btn:hover { background: rgba(255,255,255,0.1); }
-            .tab-btn.active { background: var(--accent); color: #000; font-weight: 600; border-color: var(--accent); box-shadow: 0 4px 15px rgba(88, 166, 255, 0.4);}
-            
-            .tab-content { display: none; animation: fadeIn 0.4s ease; }
-            .tab-content.active { display: block; }
-            @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-            .input-group { margin-bottom: 1rem; }
-            .input-group label { display: block; margin-bottom: 5px; color: var(--text-muted); font-size:0.9rem; }
-            .input-group input { 
-                width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--card-border); 
-                background: rgba(0,0,0,0.4); color: white; font-family: 'Outfit'; font-size: 1rem; box-sizing: border-box;
-                transition: border-color 0.2s;
-            }
-            .input-group input:focus { border-color: var(--accent); outline: none; }
-            
-            .btn {
-                background: var(--success); color: white; border: none; padding: 12px 24px; font-size: 1rem;
-                border-radius: 8px; cursor: pointer; font-family: 'Outfit'; font-weight: 600; transition: 0.2s; box-shadow: 0 4px 15px rgba(35, 134, 54, 0.3);
-            }
-            .btn:hover { background: #2ea043; transform: translateY(-1px); }
-            
-            .slot-row { display: flex; gap: 10px; margin-bottom: 15px; align-items:center; }
-            .slot-row input { flex:1; }
-            .btn-danger { background: var(--danger); box-shadow: 0 4px 15px rgba(218, 54, 51, 0.3); padding: 12px 16px;}
-            .btn-danger:hover { background: #f85149; }
-
-            /* Modern Mobile Responsiveness */
-            @media (max-width: 900px) {
-                body { padding: 1rem; }
-                .container { 
-                    grid-template-columns: 1fr; 
-                    gap: 1.5rem;
-                }
-                .sidebar { order: -1; } /* Bring stats to top on mobile */
-                .stat-grid { grid-template-columns: repeat(2, 1fr); }
-                .stat-card[style*="grid-column"] { grid-column: 1 / -1 !important; }
-                h1 { font-size: 1.5rem; }
-            }
-            
-            @media (max-width: 600px) {
-                body { padding: 0.5rem; }
-                .container { gap: 1rem; }
-                .glass-panel { padding: 1.2rem; border-radius: 16px; margin-bottom: 1rem; }
-                .stat-grid { gap: 0.8rem; }
-                .stat-card { padding: 1rem; }
-                .stat-value { font-size: 1.6rem; }
-                .stat-label { font-size: 0.75rem; }
-                
-                .header { flex-direction: column; align-items: flex-start; gap: 0.8rem; }
-                .status-badge { align-self: flex-start; font-size: 0.8rem; padding: 4px 12px; }
-                
-                #log-container { height: 300px; font-size: 0.8rem; padding: 0.8rem; }
-                .slot-row { flex-direction: column; align-items: stretch; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px;}
-                .btn-danger { width: 100%; margin-top: 5px; }
-                .tab-btn { padding: 8px 16px; font-size: 0.9rem; }
-            }
-            
-            @media (max-width: 400px) {
-                .stat-grid { grid-template-columns: 1fr; }
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>🎓 ARMS Slot Monitor</h1>
-                <div class="status-badge">● SYSTEM ONLINE</div>
-            </div>
-            
-            <div class="sidebar">
-                <div class="glass-panel stat-grid">
-                    <div class="stat-card">
-                        <div class="stat-label">Subscribers</div>
-                        <div class="stat-value" id="sub-count">--</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Monitored Slots</div>
-                        <div class="stat-value" id="slot-count">--</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Total Courses</div>
-                        <div class="stat-value" id="course-count">--</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">System Uptime</div>
-                        <div class="stat-value" style="font-size:1.4rem;" id="uptime">--</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Total Polls</div>
-                        <div class="stat-value" id="poll-count">--</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">API Latency</div>
-                        <div class="stat-value" id="api-latency">--</div>
-                    </div>
-                    <div class="stat-card" style="grid-column: 1 / -1;">
-                        <div class="stat-label">Last Poll Update</div>
-                        <div class="stat-value" style="font-size:1.2rem; color:#c9d1d9;" id="last-poll">Waiting...</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="main-content">
-                <div class="tabs">
-                    <button class="tab-btn active" onclick="switchTab('overview')">Overview</button>
-                    <button class="tab-btn" onclick="switchTab('settings')">Settings</button>
-                </div>
-
-                <div id="tab-overview" class="tab-content active">
-                    <div class="glass-panel">
-                        <h2 style="margin-top:0; font-size: 1.2rem; color: var(--text-muted);">Analytics History (24h)</h2>
-                        <div style="height: 250px; width: 100%;">
-                            <canvas id="analyticsChart"></canvas>
-                        </div>
-                    </div>
-
-                    <div class="glass-panel">
-                        <h2 style="margin-top:0; font-size: 1.2rem; color: var(--text-muted);">Live Terminal Logs</h2>
-                        <div id="log-container">Loading system logs...</div>
-                    </div>
-                </div>
-
-                <div id="tab-settings" class="tab-content glass-panel">
-                    <h2 style="margin-top:0;">Slot Configuration</h2>
-                    <p style="color:var(--text-muted); font-size:0.9rem;">Change which ARMS slots are actively monitored. The background bot updates instantly upon save.</p>
-                    
-                    <div id="slots-editor"></div>
-                    
-                    <button class="tab-btn" onclick="addSlotRow()" style="margin-top:10px;">+ Add Slot</button>
-                    <br><br>
-                    <button class="btn" onclick="saveSlots()">💾 Save Configuration</button>
-                </div>
-            </div>
-        </div>
-
-        <script>
-            let chartInstance = null;
-
-            function switchTab(tabId) {
-                document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-                document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-                document.getElementById('tab-' + tabId).classList.add('active');
-                event.target.classList.add('active');
-                if(tabId === 'settings') loadSettings();
-            }
-
-            function formatLog(line) {
-                if(!line) return '';
-                if(line.includes("GET /api/")) return ''; // Hide dashboard noise
-                let formatted = line.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                if(formatted.includes("[Bot]") || formatted.includes("[Monitor]")) formatted = `<span class="log-info">${formatted}</span>`;
-                if(formatted.includes("⚠") || formatted.includes("WARNING")) formatted = `<span class="log-warn">${formatted}</span>`;
-                if(formatted.includes("❌") || formatted.includes("ERROR")) formatted = `<span class="log-err">${formatted}</span>`;
-                if(formatted.includes("✅") || formatted.includes("started") || formatted.includes("INCREASED")) formatted = `<span class="log-success">${formatted}</span>`;
-                const timeMatch = formatted.match(/^(\\d{2}:\\d{2}:\\d{2})\\s+(.*)/);
-                if(timeMatch) return `<div class="log-line"><span class="log-time">[${timeMatch[1]}]</span>${timeMatch[2]}</div>`;
-                return `<div class="log-line">${formatted}</div>`;
-            }
-
-            async function updateDashboard() {
-                try {
-                    const statsRes = await fetch('/api/stats');
-                    const stats = await statsRes.json();
-                    document.getElementById('sub-count').innerText = stats.subscribers;
-                    document.getElementById('slot-count').innerText = stats.slots;
-                    document.getElementById('course-count').innerText = stats.total_courses;
-                    document.getElementById('uptime').innerText = stats.uptime;
-                    document.getElementById('poll-count').innerText = stats.polls;
-                    document.getElementById('api-latency').innerText = stats.latency;
-                    document.getElementById('last-poll').innerText = stats.time;
-
-                    const logsRes = await fetch('/api/logs');
-                    const logsData = await logsRes.json();
-                    const logContainer = document.getElementById('log-container');
-                    const isScrolledToBottom = logContainer.scrollHeight - logContainer.clientHeight <= logContainer.scrollTop + 50;
-                    logContainer.innerHTML = logsData.logs.map(formatLog).join('');
-                    if(isScrolledToBottom) logContainer.scrollTop = logContainer.scrollHeight;
-
-                    // Fetch chart history
-                    const histRes = await fetch('/api/history');
-                    updateChart(await histRes.json());
-                } catch(e) { console.error("Update failed", e); }
-            }
-
-            function updateChart(data) {
-                const ctx = document.getElementById('analyticsChart').getContext('2d');
-                if(!chartInstance) {
-                    chartInstance = new Chart(ctx, {
-                        type: 'line',
-                        data: {
-                            labels: data.labels,
-                            datasets: data.datasets
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            animation: false,
-                            scales: {
-                                y: { beginAtZero: false, grid: {color: 'rgba(255,255,255,0.05)'}, ticks: {color: '#8b949e'} },
-                                x: { grid: {display: false}, ticks: {color: '#8b949e', maxTicksLimit: 10} }
-                            },
-                            plugins: {
-                                legend: { labels: { color: '#c9d1d9' } }
-                            }
-                        }
-                    });
-                } else {
-                    chartInstance.data.labels = data.labels;
-                    chartInstance.data.datasets = data.datasets;
-                    chartInstance.update();
-                }
-            }
-
-            // --- Settings Editor Logic ---
-            async function loadSettings() {
-                const res = await fetch('/api/settings');
-                const data = await res.json();
-                const container = document.getElementById('slots-editor');
-                container.innerHTML = '';
-                data.slots.forEach(s => addSlotRow(s.id, s.label));
-            }
-
-            function addSlotRow(id = '', label = '') {
-                const row = document.createElement('div');
-                row.className = 'slot-row';
-                row.innerHTML = `
-                    <input type="number" placeholder="Slot ID (e.g. 1)" value="${id}" class="s-id">
-                    <input type="text" placeholder="Label (e.g. A-1)" value="${label}" class="s-label">
-                    <button class="btn btn-danger" onclick="this.parentElement.remove()">X</button>
-                `;
-                document.getElementById('slots-editor').appendChild(row);
-            }
-
-            async function saveSlots() {
-                const rows = document.querySelectorAll('.slot-row');
-                const newSlots = [];
-                rows.forEach(r => {
-                    const id = parseInt(r.querySelector('.s-id').value);
-                    const label = r.querySelector('.s-label').value;
-                    if(!isNaN(id) && label) newSlots.push({id, label});
-                });
-                
-                await fetch('/api/settings', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({slots: newSlots})
-                });
-                alert('Saved! The bot will use these slots on its next poll.');
-            }
-
-            // Init loop
-            updateDashboard();
-            setInterval(updateDashboard, 5000);
-        </script>
-    </body>
-    </html>
-    """
-    return html
-
-@app.route("/api/stats")
-@requires_auth
-def api_stats():
-    db = load_db()
-    
-    uptime_delta = get_ist_now() - GLOBAL_METRICS["start_time"]
-    hours, remainder = divmod(uptime_delta.seconds, 3600)
-    minutes, _ = divmod(remainder, 60)
-    
-    # Calculate days cleanly if available
-    uptime_str = f"{uptime_delta.days}d {hours}h {minutes}m" if uptime_delta.days > 0 else f"{hours}h {minutes}m"
-    
-    return jsonify({
-        "subscribers": len(db.get("approved", [])),
-        "slots": len(db.get("slots", [])),
-        "total_courses": GLOBAL_METRICS["total_courses"],
-        "uptime": uptime_str,
-        "polls": GLOBAL_METRICS["polls"],
-        "latency": GLOBAL_METRICS["latency"],
-        "time": f"{get_ist_now().strftime('%I:%M:%S %p')} IST"
-    })
-
-@app.route("/api/history")
-@requires_auth
-def api_history():
-    # Provide Chart.js formatting from SQLite History
-    db = load_db()
-    active_slots = db.get("slots", [])
-    
-    conn = sqlite3.connect("history.db")
-    c = conn.cursor()
-    # Fetch last 50 distinct timestamps
-    c.execute("SELECT DISTINCT timestamp FROM history ORDER BY timestamp DESC LIMIT 50")
-    times = [r[0] for r in c.fetchall()][::-1] 
-    
-    datasets = []
-    colors = ['#58a6ff', '#238636', '#d29922', '#8a2be2', '#da3633']
-    
-    for idx, slot in enumerate(active_slots):
-        sid = slot["id"]
-        color = colors[idx % len(colors)]
-        
-        c.execute("SELECT timestamp, course_count FROM history WHERE slot_id = ? ORDER BY timestamp DESC LIMIT 50", (sid,))
-        # Map out the values against the standard times
-        raw_data = {r[0]: r[1] for r in c.fetchall()}
-        
-        data_points = []
-        last_val = 0
-        for t in times:
-            if t in raw_data:
-                last_val = raw_data[t]
-            data_points.append(last_val)
-            
-        datasets.append({
-            "label": f"Slot {slot['label']} ({sid})",
-            "data": data_points,
-            "borderColor": color,
-            "backgroundColor": color + "33",
-            "borderWidth": 2,
-            "pointRadius": 0,
-            "fill": True,
-            "tension": 0.4
-        })
-    conn.close()
-    
-    # Format labels cleanly (HH:MM)
-    clean_labels = [datetime.strptime(t, "%Y-%m-%d %H:%M:%S").strftime("%H:%M") for t in times]
-    return jsonify({"labels": clean_labels, "datasets": datasets})
-
-@app.route("/api/settings", methods=["GET", "POST"])
-@requires_auth
-def api_settings():
-    db = load_db()
-    if request.method == "POST":
-        data = request.json
-        if "slots" in data:
-            db["slots"] = data["slots"]
-            save_db(db)
-            return jsonify({"status": "success"})
-    return jsonify({"slots": db.get("slots", [])})
-
-@app.route("/api/logs")
-@requires_auth
-def api_logs():
-    try:
-        # Read last 150 lines efficiently
-        with open("slot_monitor.log", "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            return jsonify({"logs": lines[-150:]})
-    except Exception as e:
-        return jsonify({"logs": [f"Error reading logs: {e}"]})
-
-@app.route("/ping")
-def ping():
-    return "pong"
-
-def flask_server():
-    import werkzeug.serving
-    import logging
-    
-    # Force Werkzeug logger to be quiet
-    log_werkzeug = logging.getLogger('werkzeug')
-    log_werkzeug.setLevel(logging.ERROR)
-    log_werkzeug.disabled = True
-
-    # Custom handler to completely suppress request logging
-    class NoLogRequestHandler(werkzeug.serving.WSGIRequestHandler):
-        def log_request(self, code='-', size='-'):
-            pass
-        def log(self, type, message, *args):
-            pass
-
-    port = int(os.environ.get("PORT", 8100))
-    ip_addr = os.environ.get("IP", "::")
-    log.info(f"  [Web] Attempting to start Flask WSGI on {ip_addr}:{port} (Silent HTTP mode)")
-    werkzeug.serving.run_simple(
-        ip_addr, port, app,
-        use_reloader=False, 
-        use_debugger=False,
-        request_handler=NoLogRequestHandler
-    )
-
 if __name__ == "__main__":
     db_init = load_db()
     active_slots_init = db_init.get("slots", [])
@@ -1327,12 +836,10 @@ if __name__ == "__main__":
         "🚀 <b>ARMS Slot Monitor is running!</b>\n\n"
         f"👁 Watching Slots: <b>{slot_labels_str}</b>\n"
         f"⏱ Poll Interval: every <b>{POLL_INTERVAL}s</b>\n"
+        "/dashboard – view live control panel\n"
         "/setcookie &lt;value&gt; – update session cookie live",
+        inline_keyboard=[[{"text": "📊 Open Control Panel", "url": DASHBOARD_URL}]] if DASHBOARD_URL else None
     )
-
-    # Start Flask Web Dashboard in background thread for Alwaysdata HTTP
-    t_web = threading.Thread(target=flask_server, daemon=True, name="WebThread")
-    t_web.start()
 
     # Start bot in background thread
     t_bot = threading.Thread(target=bot_thread, daemon=True, name="BotThread")
