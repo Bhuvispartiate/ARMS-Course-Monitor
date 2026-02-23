@@ -711,6 +711,9 @@ def monitor_thread():
                         
                         # Also send separately to admin
                         send_message(ADMIN_CHAT_ID, tg_text)
+                        
+                        # Broadcast to the channel stream
+                        broadcast(tg_text)
 
                     elif current_count < prev_count:
                         log.info(f"  [Slot {slot_id}] 📉 Count decreased {prev_count}→{current_count} (no notification sent)")
@@ -778,9 +781,7 @@ def authenticate():
 
 def requires_auth(f):
     def decorated(*args, **kwargs):
-        auth = request.authorization
-        if not auth or not check_auth(auth.username, auth.password):
-            return authenticate()
+        # Password authentication removed as requested
         return f(*args, **kwargs)
     decorated.__name__ = f.__name__
     return decorated
@@ -1264,6 +1265,10 @@ def api_logs():
             return jsonify({"logs": lines[-150:]})
     except Exception as e:
         return jsonify({"logs": [f"Error reading logs: {e}"]})
+
+@app.route("/ping")
+def ping():
+    return "pong"
 
 def flask_server():
     import werkzeug.serving
