@@ -40,26 +40,12 @@ def load_db() -> dict:
 
 def save_db(db: dict) -> None:
     SUBSCRIBERS_FILE.write_text(json.dumps(db, indent=2, ensure_ascii=False), encoding="utf-8")
-\napp = Flask(__name__)
+app = Flask(__name__)
 
-# Basic Authentication wrapper
-def check_auth(username, password):
-    env_user = os.environ.get("DASHBOARD_USER", "KnightWinner")
-    env_pass = os.environ.get("DASHBOARD_PASS", "9360406137")
-    return username == env_user and password == env_pass
-
-def authenticate():
-    return Response(
-    'Could not verify your access level for that URL.\n'
-    'You have to login with proper credentials', 401,
-    {'WWW-Authenticate': 'Basic realm="Login Required"'})
-
+# Authentication removed — dashboard is open access
 def requires_auth(f):
-    def decorated(*args, **kwargs):
-        # Password authentication removed as requested
-        return f(*args, **kwargs)
-    decorated.__name__ = f.__name__
-    return decorated
+    f.__name__ = f.__name__
+    return f
 
 @app.route("/")
 @requires_auth

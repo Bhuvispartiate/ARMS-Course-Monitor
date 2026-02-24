@@ -733,20 +733,8 @@ def monitor_thread():
                         tg.append(f"\n🕐 <i>{get_ist_now().strftime('%Y-%m-%d %I:%M:%S %p IST')}</i>")
                         tg_text = "\n".join(tg)
 
-                        # Broadcast to all approved subscribers
-                        db = load_db()
-                        u_list = db.get("approved", [])
-                        msg = {"chat_id": 0, "text": tg_text, "parse_mode": "HTML"}
-                        
-                        log.info(f"  [Slot {slot_label}] Broadcasting alert to {len(u_list)} users.")
-                        for u_id in u_list:
-                            msg["chat_id"] = u_id
-                            tg_post("sendMessage", **msg)
-                        
-                        # Also send separately to admin
+                        # Send to Admin and Channel only
                         send_message(ADMIN_CHAT_ID, tg_text)
-                        
-                        # Broadcast to the channel stream
                         broadcast(tg_text)
 
                     elif current_count < prev_count:
@@ -783,15 +771,21 @@ def monitor_thread():
 
 def handle_shutdown(signum=None, frame=None):
     """Notify admin and exit gracefully on shutdown signals."""
-    sig_name = signal.Signals(signum).name if signum else "Manual"
+    sig_name = signal.Signals(signum).name if signum else "Manual shutdown"
+    reason_map = {
+        "SIGINT":  "Ctrl+C pressed / manual stop",
+        "SIGTERM": "Server terminated (platform restart or deploy)",
+        "Manual shutdown": "Unhandled exception in monitor thread",
+    }
+    reason = reason_map.get(sig_name, f"Signal: {sig_name}")
     log.info(f"\n[System] 🛑 Shutdown signal ({sig_name}) received. Notifying admin…")
     try:
         send_message(
             ADMIN_CHAT_ID,
             "🛑 <b>ARMS Monitor — Server Powering Down</b>\n\n"
-            "The bot process is stopping or the server is restarting.\n"
-            "Monitoring will be paused until the service is back online.\n\n"
-            f"🕐 <i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+            f"📌 <b>Reason:</b> {reason}\n\n"
+            "Monitoring will be paused until the service is back online.\n"
+            f"🕐 <i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}</i>"
         )
     except Exception as e:
         log.error(f"  [System] Failed to send shutdown message: {e}")
@@ -835,9 +829,7 @@ if __name__ == "__main__":
         "🚀 <b>ARMS Slot Monitor is running!</b>\n\n"
         f"👁 Watching Slots: <b>{slot_labels_str}</b>\n"
         f"⏱ Poll Interval: every <b>{POLL_INTERVAL}s</b>\n"
-        "/dashboard – view live control panel\n"
-        "/setcookie &lt;value&gt; – update session cookie live",
-        inline_keyboard=[[{"text": "📊 Open Control Panel", "url": DASHBOARD_URL}]] if DASHBOARD_URL else None
+        "/setcookie &lt;value&gt; – update session cookie live"
     )
 
     # Start bot in background thread
