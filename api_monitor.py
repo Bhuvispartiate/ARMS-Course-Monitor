@@ -47,7 +47,7 @@ BASE_URL = (
 ARMS_USERNAME = os.environ.get("ARMS_USERNAME", "")   # ARMS username / roll number
 ARMS_PASSWORD = os.environ.get("ARMS_PASSWORD", "")   # ARMS password
 
-ARMS_LOGIN_URL = "https://arms.sse.saveetha.com/Login.aspx"
+ARMS_LOGIN_URL = "https://arms.sse.saveetha.com/Login.aspx?s=exp"
 
 # ARMS session cookie — auto-refreshed via login; also settable via /setcookie
 _session = os.environ.get("ARMS_SESSION", "")
@@ -155,8 +155,7 @@ def auto_login() -> bool:
                 send_message(
                     ADMIN_CHAT_ID,
                     f"🔑 <b>Auto-login successful!</b>\n"
-                    f"New session: <code>{session_id[:16]}…</code>",
-                    inline_keyboard=[[{"text": "🔗 Open Dashboard", "url": DASHBOARD_URL}]] if DASHBOARD_URL else None
+                    f"New session: <code>{session_id[:16]}…</code>"
                 )
                 return True
             else:
@@ -745,10 +744,10 @@ def monitor_thread():
                             tg_post("sendMessage", **msg)
                         
                         # Also send separately to admin
-                        send_message(ADMIN_CHAT_ID, tg_text, inline_keyboard=[[{"text": "🔗 Open Dashboard", "url": DASHBOARD_URL}]] if DASHBOARD_URL else None)
+                        send_message(ADMIN_CHAT_ID, tg_text)
                         
                         # Broadcast to the channel stream
-                        broadcast(tg_text, include_dashboard=True)
+                        broadcast(tg_text)
 
                     elif current_count < prev_count:
                         log.info(f"  [Slot {slot_id}] 📉 Count decreased {prev_count}→{current_count} (no notification sent)")
