@@ -648,8 +648,7 @@ def summarise(courses: list[dict]) -> str:
     lines = []
     for c in available[:5]:
         faculty_name = get_faculty_name(c)
-        fac_str = f" | {faculty_name}" if faculty_name else ""
-        lines.append(f"• {c['SubjectCode']} – {c['AvailableCount']} slots{fac_str}")
+        lines.append(f"• {c['SubjectCode']} – {c['AvailableCount']} slots | {faculty_name}")
 
     if len(available) > 5:
         lines.append(f"  … and {len(available) - 5} more")
@@ -677,7 +676,7 @@ def get_faculty_name(course: dict) -> str:
         faculty_name = str(value).strip()
         if faculty_name and faculty_name.lower() not in {"null", "none", "nan"}:
             return faculty_name
-    return ""
+    return "NTA"
 
 
 
@@ -753,10 +752,8 @@ def monitor_thread():
                                 course_line = (
                                     f"  ➕ {html.escape(str(c['SubjectCode']))} – "
                                     f"{html.escape(str(c['SubjectName']))} "
-                                    f"({c['AvailableCount']} slots)"
+                                    f"({c['AvailableCount']} slots) | Faculty: <b>{html.escape(faculty_name)}</b>"
                                 )
-                                if faculty_name:
-                                    course_line += f" | Faculty: <b>{html.escape(faculty_name)}</b>"
                                 added_lines.append(course_line)
 
                         # Build Telegram message
