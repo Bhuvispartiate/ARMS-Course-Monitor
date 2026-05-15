@@ -513,7 +513,7 @@ def api_history():
     conn.close()
     
     # Format labels cleanly (HH:MM)
-    clean_labels = [datetime.strptime(t, "%Y-%m-%d %H:%M:%S").strftime("%H:%M") for t in times]
+    clean_labels = [datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S").strftime("%H:%M") for t in times]
     return jsonify({"labels": clean_labels, "datasets": datasets})
 
 @app.route("/api/settings", methods=["GET", "POST"])
