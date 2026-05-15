@@ -541,9 +541,16 @@ def api_settings():
 @requires_auth
 def api_logs():
     try:
-        # Read last 150 lines efficiently
-        with open("slot_monitor.log", "r", encoding="utf-8") as f:
-            lines = f.readlines()
+        # Read last 150 lines efficiently without blowing up memory
+        if not os.path.exists("slot_monitor.log"):
+            return jsonify({"logs": ["No logs yet."]})
+            
+        with open("slot_monitor.log", "rb") as f:
+            try:
+                f.seek(-15000, os.SEEK_END)
+            except IOError:
+                pass
+            lines = f.read().decode("utf-8", errors="ignore").splitlines()
             return jsonify({"logs": lines[-150:]})
     except Exception as e:
         return jsonify({"logs": [f"Error reading logs: {e}"]})
