@@ -53,6 +53,10 @@ def requires_auth(f):
     f.__name__ = f.__name__
     return f
 
+@app.route("/favicon.ico")
+def favicon():
+    return Response(status=204)
+
 @app.route("/")
 @requires_auth
 def index():
