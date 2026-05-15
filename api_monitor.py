@@ -270,9 +270,12 @@ def tg_post(method: str, **kwargs) -> dict:
     """POST to any Telegram Bot API method."""
     try:
         r = requests.post(f"{TELEGRAM_API}/{method}", json=kwargs, timeout=10)
-        return r.json()
+        res = r.json()
+        if not res.get("ok"):
+            log.error(f"  [Telegram] ❌ {method} Error: {res.get('description')} (Code: {res.get('error_code')})")
+        return res
     except Exception as e:
-        log.warning(f"[Telegram] {method} failed: {e}")
+        log.warning(f"  [Telegram] ❌ {method} Exception: {e}")
         return {}
 
 
