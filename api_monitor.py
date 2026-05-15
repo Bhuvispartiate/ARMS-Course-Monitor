@@ -141,6 +141,120 @@ def auto_login() -> bool:
             }
             resp = s.post(ARMS_LOGIN_URL, data=payload, timeout=30, allow_redirects=True)
 
+import sys
+import http.server
+import socketserver
+
+# ─────────────────────────────────────────────────────
+#  CONFIGURATION
+# ─────────────────────────────────────────────────────
+
+BASE_URL = (
+    "https://arms.sse.saveetha.com/Handler/Student.ashx"
+    "?Page=StudentInfobyId&Mode=GetCourseBySlot&Id={slot_id}"
+)
+
+# ARMS credentials for auto-login (hardcoded)
+ARMS_USERNAME = "P192512045"   # ARMS username / roll number
+ARMS_PASSWORD = "welcome"      # ARMS password
+
+ARMS_LOGIN_URL = "https://arms.sse.saveetha.com/Login.aspx?s=exp"
+
+# ARMS session cookie — auto-refreshed via login; also settable via /setcookie
+COOKIES = {"ASP.NET_SessionId": ""}
+
+# Error alert rate-limiting: only alert admin once per error type per hour
+_last_alert: dict[str, float] = {}
+ALERT_COOLDOWN = 3600   # seconds
+
+HEADERS = {
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "accept-language": "en-US,en;q=0.5",
+    "cache-control": "no-cache, no-store",
+    "pragma": "no-cache",
+    "user-agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/145.0.0.0 Safari/537.36"
+    ),
+}
+
+# Seconds between slot polls
+POLL_INTERVAL = 20
+
+# ── Telegram ─────────────────────
+TELEGRAM_BOT_TOKEN = "8340772186:AAGpn5IZx6Af_3oQaomJir2itlfiCmQJI3s"
+TELEGRAM_API       = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+ADMIN_CHAT_ID      = "8467592443"        # only this ID can run admin commands
+ADMIN_PHONE        = "9360406137"         # your phone number (for reference)
+CHANNEL_CHAT_ID    = "-1003845063774"    # private channel — all slot alerts go here
+
+# File that stores subscribers across restarts
+SUBSCRIBERS_FILE   = Path("subscribers.json")
+
+# Dashboard URL for notifications
+DASHBOARD_URL      = "https://your-site.alwaysdata.net"
+
+# ─────────────────────────────────────────────────────
+#  LOGGING
+# ─────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(message)s",
+    datefmt="%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("slot_monitor.log", encoding="utf-8"),
+    ],
+)
+log = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────
+#  AUTO-LOGIN
+# ──────────────────────────────────────────────────────
+
+def auto_login() -> bool:
+    """
+    Log into ARMS with ARMS_USERNAME / ARMS_PASSWORD and update
+    COOKIES with the fresh ASP.NET_SessionId.
+    Returns True on success, False on failure.
+    """
+    if not ARMS_USERNAME or not ARMS_PASSWORD:
+        log.warning("  [Login] No credentials set — skipping auto-login.")
+        return False
+
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            log.info(f"  [Login] Attempting auto-login to ARMS (Attempt {attempt})…")
+            s = requests.Session()
+
+            # Step 1: GET login page to grab hidden ASP.NET fields
+            r = s.get(ARMS_LOGIN_URL, timeout=30)
+            r.raise_for_status()
+
+            import re
+            def _field(name):
+                m = re.search(rf'id="{name}"[^>]*value="([^"]*)"|name="{name}"[^>]*value="([^"]*)"|value="([^"]*)"[^>]*name="{name}"', r.text)
+                return (m.group(1) or m.group(2) or m.group(3) or "") if m else ""
+
+            viewstate       = _field("__VIEWSTATE")
+            eventvalidation = _field("__EVENTVALIDATION")
+            vsgenerator     = _field("__VIEWSTATEGENERATOR")
+
+            # Step 2: POST credentials
+            payload = {
+                "__VIEWSTATE":          viewstate,
+                "__VIEWSTATEGENERATOR": vsgenerator,
+                "__EVENTVALIDATION":    eventvalidation,
+                "txtusername":          ARMS_USERNAME,
+                "txtpassword":          ARMS_PASSWORD,
+                "btnlogin":             "Login",
+            }
+            resp = s.post(ARMS_LOGIN_URL, data=payload, timeout=30, allow_redirects=True)
+
             # Step 3: Extract session cookie
             session_id = s.cookies.get("ASP.NET_SessionId") or resp.cookies.get("ASP.NET_SessionId")
 
@@ -148,11 +262,11 @@ def auto_login() -> bool:
                 COOKIES["ASP.NET_SessionId"] = session_id
                 _last_alert.clear()   # reset cooldowns — fresh session
                 log.info(f"  [Login] ✅ Auto-login successful! Session: {session_id[:12]}…")
-                send_message(
-                    ADMIN_CHAT_ID,
-                    f"🔑 <b>Auto-login successful!</b>\n"
-                    f"New session: <code>{session_id[:16]}…</code>"
-                )
+                # send_message(
+                #     ADMIN_CHAT_ID,
+                #     f"🔑 <b>Auto-login successful!</b>\n"
+                #     f"New session: <code>{session_id[:16]}…</code>"
+                # )
                 return True
             else:
                 log.warning(f"  [Login] ⚠ Attempt {attempt} failed: No session ID in response.")
@@ -755,120 +869,6 @@ def monitor_thread():
                                     f"({c['AvailableCount']} slots) | Faculty: <b>{html.escape(faculty_name)}</b>"
                                 )
                                 added_lines.append(course_line)
-
-                        # Build Telegram message
-                        tg = [f"<b>🔔 ARMS Slot {slot_label}: New Course Added! ▲</b>",
-                              f"Courses: <b>{prev_count} → {current_count}</b>  (+{delta})"]
-                        if added_lines:
-                            tg.append("\n<b>Added:</b>\n" + "\n".join(added_lines))
-                        tg.append(f"\n🕐 <i>{get_ist_now().strftime('%Y-%m-%d %I:%M:%S %p IST')}</i>")
-                        tg_text = "\n".join(tg)
-
-                        # Send to Admin and Channel only
-                        send_message(ADMIN_CHAT_ID, tg_text)
-                        broadcast(tg_text)
-
-                    elif current_count < prev_count:
-                        log.info(f"  [Slot {slot_id}] 📉 Count decreased {prev_count}→{current_count} (no notification sent)")
-                    else:
-                        pass  # Reduced logging: only log on changes
-
-            except Exception as e:
-                log.error(f"  [Slot {slot_label}] ❌ Error processing courses: {e}")
-        
-        cycle_end_t = time.time()
-        GLOBAL_METRICS["latency"] = f"{(cycle_end_t - cycle_start_t):.2f}s"
-        GLOBAL_METRICS["total_courses"] = cycle_courses_count
-
-        try:
-            import json
-            with open("metrics.json", "w") as mf:
-                json.dump({
-                    "start_time": GLOBAL_METRICS["start_time"].isoformat(),
-                    "polls": GLOBAL_METRICS["polls"],
-                    "latency": GLOBAL_METRICS["latency"],
-                    "total_courses": GLOBAL_METRICS["total_courses"]
-                }, mf)
-        except Exception as e:
-            log.error(f"  [Metrics] Failed to save metrics: {e}")
-
-        # Sleep before next poll
-        time.sleep(POLL_INTERVAL)
-
-
-# ─────────────────────────────────────────────────────
-#  SHUTDOWN HANDLER
-# ─────────────────────────────────────────────────────
-
-def handle_shutdown(signum=None, frame=None):
-    """Notify admin and exit gracefully on shutdown signals."""
-    sig_name = signal.Signals(signum).name if signum else "Manual shutdown"
-    reason_map = {
-        "SIGINT":  "Ctrl+C pressed / manual stop",
-        "SIGTERM": "Server terminated (platform restart or deploy)",
-        "Manual shutdown": "Unhandled exception in monitor thread",
-    }
-    reason = reason_map.get(sig_name, f"Signal: {sig_name}")
-    log.info(f"\n[System] 🛑 Shutdown signal ({sig_name}) received. Notifying admin…")
-    try:
-        send_message(
-            ADMIN_CHAT_ID,
-            "🛑 <b>ARMS Monitor — Server Powering Down</b>\n\n"
-            f"📌 <b>Reason:</b> {reason}\n\n"
-            "Monitoring will be paused until the service is back online.\n"
-            f"🕐 <i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}</i>"
-        )
-    except Exception as e:
-        log.error(f"  [System] Failed to send shutdown message: {e}")
-    
-    log.info("Goodbye!")
-    os._exit(0)  # Kill all threads and exit immediately
-
-
-# ─────────────────────────────────────────────────────
-#  ENTRY POINT
-# ─────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    db_init = load_db()
-    active_slots_init = db_init.get("slots", [])
-    slot_ids_init = [s["id"] for s in active_slots_init]
-    
-    log.info("=" * 60)
-    log.info("  ARMS Slot Monitor  –  Multi-User Bot Service")
-    log.info(f"  Admin : {ADMIN_CHAT_ID}  |  Slots: {slot_ids_init}")
-    log.info("=" * 60)
-
-    # Ensure subscribers file exists
-    if not SUBSCRIBERS_FILE.exists():
-        save_db({"approved": [], "pending": {}})
-        log.info("  Created subscribers.json")
-
-    # Auto-login to get a fresh session cookie
-    if ARMS_USERNAME and ARMS_PASSWORD:
-        auto_login()
-    else:
-        log.info("  [Login] Running with hardcoded session cookie (no credentials set).")
-
-    # Update bot profile (Bio/About)
-    set_bot_profile()
-
-    # Startup message to admin
-    slot_labels_str = ", ".join(s["label"] for s in active_slots_init) if active_slots_init else "None"
-    send_message(
-        ADMIN_CHAT_ID,
-        "🚀 <b>ARMS Slot Monitor is running!</b>\n\n"
-        f"👁 Watching Slots: <b>{slot_labels_str}</b>\n"
-        f"⏱ Poll Interval: every <b>{POLL_INTERVAL}s</b>\n"
-        "/setcookie &lt;value&gt; – update session cookie live"
-    )
-
-    # Start bot in background thread
-    t_bot = threading.Thread(target=bot_thread, daemon=True, name="BotThread")
-    t_bot.start()
-
-    # Register shutdown signals (SIGINT for Ctrl+C, SIGTERM for cloud restarts)
-    signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
 
     # Run monitor on main thread
