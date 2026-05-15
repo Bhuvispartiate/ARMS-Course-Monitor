@@ -1,6 +1,18 @@
 services:
   - type: web
-    name: arms-slot-monitor
+    name: arms-slot-dashboard
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python dashboard.py
+    plan: free
+    envVars:
+      - key: DASHBOARD_USER
+        sync: false
+      - key: DASHBOARD_PASS
+        sync: false
+
+  - type: background
+    name: arms-monitor-bot
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python api_monitor.py

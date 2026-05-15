@@ -22,6 +22,7 @@ import time
 import threading
 import logging
 import sqlite3
+import html
 from datetime import datetime
 import pytz
 from pathlib import Path
@@ -43,9 +44,9 @@ BASE_URL = (
     "?Page=StudentInfobyId&Mode=GetCourseBySlot&Id={slot_id}"
 )
 
-# ARMS credentials for auto-login
-ARMS_USERNAME = os.environ.get("ARMS_USERNAME", "")   # ARMS username / roll number
-ARMS_PASSWORD = os.environ.get("ARMS_PASSWORD", "")   # ARMS password
+# ARMS credentials for auto-login (hardcoded)
+ARMS_USERNAME = "P192512045"   # ARMS username / roll number
+ARMS_PASSWORD = "welcome"      # ARMS password
 
 ARMS_LOGIN_URL = "https://arms.sse.saveetha.com/Login.aspx?s=exp"
 
@@ -654,6 +655,30 @@ def summarise(courses: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def get_faculty_name(course: dict) -> str:
+    """Return the best faculty name available from the ARMS payload."""
+    faculty_keys = (
+        "FacultyName",
+        "Faculty",
+        "StaffName",
+        "Staff",
+        "TeacherName",
+        "Teacher",
+        "EmployeeName",
+        "Employee",
+        "ProfessorName",
+        "Professor",
+    )
+    for key in faculty_keys:
+        value = course.get(key)
+        if value is None:
+            continue
+        faculty_name = str(value).strip()
+        if faculty_name and faculty_name.lower() not in {"null", "none", "nan"}:
+            return faculty_name
+    return ""
+
+
 
 
 
@@ -723,7 +748,15 @@ def monitor_thread():
                         added_lines = []
                         for sid, c in curr_ids.items():
                             if sid not in prev_ids:
-                                added_lines.append(f"  ➕ {c['SubjectCode']} – {c['SubjectName']} ({c['AvailableCount']} slots)")
+                                faculty_name = get_faculty_name(c)
+                                course_line = (
+                                    f"  ➕ {html.escape(str(c['SubjectCode']))} – "
+                                    f"{html.escape(str(c['SubjectName']))} "
+                                    f"({c['AvailableCount']} slots)"
+                                )
+                                if faculty_name:
+                                    course_line += f" | Faculty: <b>{html.escape(faculty_name)}</b>"
+                                added_lines.append(course_line)
 
                         # Build Telegram message
                         tg = [f"<b>🔔 ARMS Slot {slot_label}: New Course Added! ▲</b>",

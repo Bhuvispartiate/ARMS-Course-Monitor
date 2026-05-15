@@ -1,0 +1,16 @@
+# Environment secrets — never commit
+.env
+
+# Runtime generated files
+*.log
+history.db
+subscribers.json
+metrics.json
+latest_slot*.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
