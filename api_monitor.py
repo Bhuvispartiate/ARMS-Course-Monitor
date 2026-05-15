@@ -644,7 +644,13 @@ def summarise(courses: list[dict]) -> str:
     available = [c for c in courses if c.get("AvailableCount", 0) > 0]
     if not available:
         return "No open slots."
-    lines = [f"• {c['SubjectCode']} – {c['AvailableCount']} slots" for c in available[:5]]
+    
+    lines = []
+    for c in available[:5]:
+        faculty_name = get_faculty_name(c)
+        fac_str = f" | {faculty_name}" if faculty_name else ""
+        lines.append(f"• {c['SubjectCode']} – {c['AvailableCount']} slots{fac_str}")
+
     if len(available) > 5:
         lines.append(f"  … and {len(available) - 5} more")
     return "\n".join(lines)
