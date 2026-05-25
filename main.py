@@ -143,10 +143,15 @@ def auto_login() -> bool:
                 COOKIES["ASP.NET_SessionId"] = session_id
                 _last_alert.clear()
                 log.info(f"  [Login] ✅ Auto-login successful! Session: {session_id[:12]}…")
+                admin_id = CONFIG.get("admin_chat_id")
+                if admin_id: send_message(admin_id, f"✅ <b>Auto Login Success</b>\nSession: <code>{session_id[:12]}</code>…")
                 return True
             time.sleep(2)
         except Exception as e:
             time.sleep(2)
+    
+    admin_id = CONFIG.get("admin_chat_id")
+    if admin_id: send_message(admin_id, f"❌ <b>Login Failed</b>\nFailed to auto-login to ARMS after 3 attempts.")
     return False
 
 def tg_post(method: str, **kwargs) -> dict:
@@ -240,7 +245,7 @@ def fetch_courses(slot_id: int):
             return data
         except Exception as e:
             if attempt == 3:
-                alert_admin(f"slot{slot_id}_err", f"💥 Slot {slot_id} Error: {e}")
+                alert_admin(f"slot{slot_id}_err", f"❌ <b>Error on API response</b>\nSlot {slot_id} failed to fetch data: <code>{e}</code>")
             time.sleep(2)
     return None
 
@@ -695,6 +700,9 @@ def ping(): return "pong"
 def handle_shutdown(signum=None, frame=None):
     sig_name = signal.Signals(signum).name if signum else "Manual shutdown"
     log.info(f"\n[System] 🛑 Shutdown signal ({sig_name}) received.")
+    admin_id = CONFIG.get("admin_chat_id")
+    if admin_id:
+        send_message(admin_id, f"🛑 <b>System Shut Down</b>\n\nARMS Course Monitor has been stopped.\nReason: <code>{sig_name}</code>\n\n🕐 <i>{get_ist_now().strftime('%Y-%m-%d %I:%M:%S %p IST')}</i>")
     sys.exit(0)
 
 if __name__ == "__main__":
