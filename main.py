@@ -221,6 +221,9 @@ def bot_thread():
                 elif text == "/dashboard":
                     dash = CONFIG.get('dashboard_url')
                     if dash: send_message(chat_id, f"📊 <b>ARMS Monitor Dashboard</b>", inline_keyboard=[[{"text": "🔗 Open Dashboard", "url": dash}]])
+                elif text == "/testchannel":
+                    broadcast("🧪 <b>Test Message</b>\n\nThis is a test message to ensure the channel broadcast is working correctly.")
+                    send_message(chat_id, "✅ <b>Test message sent to the channel!</b>")
         except Exception as e:
             log.error(f"  [Bot] Error: {e}")
             time.sleep(5)
