@@ -1,4 +1,0 @@
-#!/bin/bash
-python dashboard.py &
-python api_monitor.py &
-wait
