@@ -36,9 +36,9 @@ def load_config():
         "poll_interval": 20,
         "dashboard_user": "Knightwinner",
         "dashboard_pass": "GreaterShifter",
-        "telegram_bot_token": "8340772186:AAFIec3xF738rknAyQKkEtTZl0ItCnhFNXI",
-        "admin_chat_id": "8467592443",
-        "channel_chat_id": "-1003845063774",
+        "telegram_bot_token": "",
+        "admin_chat_id": "",
+        "channel_chat_id": "",
         "dashboard_url": "http://arms-course-monitor.alwaysdata.net/",
         "slots": [
             {"id": 4, "label": "A"},
@@ -159,7 +159,9 @@ def send_message(chat_id: str | int, text: str, reply_markup=None, inline_keyboa
     payload = {"chat_id": str(chat_id), "text": text, "parse_mode": "HTML"}
     if reply_markup: payload["reply_markup"] = reply_markup
     elif inline_keyboard: payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
-    tg_post("sendMessage", **payload)
+    resp = tg_post("sendMessage", **payload)
+    if resp and not resp.get("ok"):
+        log.error(f"  [Telegram] Failed to send message: {resp.get('description')}")
 
 def broadcast(text: str) -> None:
     dash = CONFIG.get('dashboard_url')
@@ -188,6 +190,10 @@ def bot_thread():
     while True:
         try:
             resp = requests.get(f"{TELEGRAM_API}/getUpdates", params={"offset": offset, "timeout": 30}, timeout=35).json()
+            if not resp.get("ok"):
+                log.error(f"  [Bot] Telegram API Error: {resp.get('description')}")
+                time.sleep(5)
+                continue
             for update in resp.get("result", []):
                 offset = update["update_id"] + 1
                 msg = update.get("message", {})
@@ -195,8 +201,10 @@ def bot_thread():
                 chat_id = str(msg["chat"]["id"])
                 text = msg.get("text", "").strip()
                 
-                admin_id = CONFIG.get("admin_chat_id")
-                if chat_id != admin_id: continue
+                admin_id = str(CONFIG.get("admin_chat_id"))
+                if chat_id != admin_id:
+                    log.warning(f"  [Bot] Ignored message from unauthorized chat_id: {chat_id} (expected {admin_id})")
+                    continue
                 
                 if text.startswith("/setcookie "):
                     val = text[11:].strip()
@@ -208,7 +216,8 @@ def bot_thread():
                 elif text == "/dashboard":
                     dash = CONFIG.get('dashboard_url')
                     if dash: send_message(chat_id, f"📊 <b>ARMS Monitor Dashboard</b>", inline_keyboard=[[{"text": "🔗 Open Dashboard", "url": dash}]])
-        except:
+        except Exception as e:
+            log.error(f"  [Bot] Error: {e}")
             time.sleep(5)
 
 def fetch_courses(slot_id: int):
