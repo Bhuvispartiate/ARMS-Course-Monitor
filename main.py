@@ -255,6 +255,13 @@ def get_faculty_name(course: dict) -> str:
 
 def monitor_thread():
     log.info("  [Monitor] Starting slot monitor…")
+    
+    # Notify Admin that monitoring has started
+    admin_id = CONFIG.get("admin_chat_id")
+    if admin_id:
+        startup_msg = f"🟢 <b>System Online</b>\n\nARMS Course Monitor has started successfully.\nMonitoring {len(CONFIG.get('slots', []))} slots.\n\n🕐 <i>{get_ist_now().strftime('%Y-%m-%d %I:%M:%S %p IST')}</i>"
+        send_message(admin_id, startup_msg)
+        
     baselines = {}
     while True:
         poll_interval = CONFIG.get("poll_interval", 20)
