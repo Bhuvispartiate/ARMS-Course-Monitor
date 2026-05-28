@@ -169,9 +169,7 @@ def send_message(chat_id: str | int, text: str, reply_markup=None, inline_keyboa
         log.error(f"  [Telegram] Failed to send message: {resp.get('description')}")
 
 def broadcast(text: str) -> None:
-    dash = CONFIG.get('dashboard_url')
-    inline_kb = [[{"text": "🔗 Open Dashboard", "url": dash}]] if dash else None
-    send_message(CONFIG.get('channel_chat_id'), text, inline_keyboard=inline_kb)
+    send_message(CONFIG.get('channel_chat_id'), text)
 
 def alert_admin(key: str, message: str) -> None:
     now = time.time()
